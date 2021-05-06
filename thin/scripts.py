@@ -1,3 +1,5 @@
+import functools
+import numpy as np
 import tensorflow as tf
 
 
@@ -26,40 +28,70 @@ def with_output(name, dtype=None, shape=None):
         output_shapes=shape)
 
 
-def _as_func(is_numpy=None, is_tf=None):
-    def _as_func_decorator(f, include_inputs):
-        def _f(inputs):
+def _as_func(as_=None):
+    def _as_func_decorator(f, include_inputs=False, *args, **kwargs):
+        f_partial = functools.partial(f, *args, **kwargs)
+
+        input_names = getattr(f, 'input_names', [])
+        input_types = getattr(f, 'input_types', [])
+        input_defaults = getattr(f, 'input_defaults', [])
+
+        output_names = getattr(f, 'output_names', [])
+        output_types = getattr(f, 'output_types', [])
+        output_shapes = getattr(f, 'output_shapes', [])
+
+        def _get_output_list(inputs):
             input_list = []
-            for (name, dtype, default) in zip(f.input_names, f.input_types, f.input_defaults):
+            for (name, dtype, default) in zip(input_names, input_types, input_defaults):
                 if name in inputs:
                     input_ = inputs[name]
-                elif is_numpy:
+                elif as_ in ['np_fn', 'np_gen']:
                     input_ = np.asarray(default)
-                elif is_tf:
+                elif as_ == 'tf':
                     input_ = tf.constant(default, dtype=dtype)
 
                 input_list.append(input_)
 
-            if is_numpy:
-                output_list = f(*input_list)
-            elif is_tf:
-                output_list = tf.numpy_function(f, input_list, f.output_types)
+            if as_ in ['np_fn', 'np_gen']:
+                output_list = f_partial(*input_list)
+            elif as_ == 'tf':
+                output_list = tf.numpy_function(f_partial, input_list, output_types)
 
+            return output_list
+
+        def _set_outputs(inputs, output_list):
             if include_inputs:
                 outputs = inputs
             else:
                 outputs = {}
 
-            for (output, name, shape) in zip(output_list, f.output_names, f.output_shapes):
-                if is_numpy:
+            for (output, name, shape) in zip(output_list, output_names, output_shapes):
+                if as_ in ['np_fn', 'np_gen']:
                     outputs[name] = output
-                elif is_tf:
+                elif as_ == 'tf':
                     outputs[name] = tf.ensure_shape(output, shape)
 
             return outputs
+
+        # writing separate functions so tf can parse
+        if as_ == 'np_gen':
+            def _f(inputs={}):
+                output_list = _get_output_list(inputs)
+                for _output_list in output_list:
+                    yield _set_outputs(inputs, _output_list)
+        else:
+            def _f(inputs={}):
+                output_list = _get_output_list(inputs)
+                return _set_outputs(inputs, output_list)
+
+        if not include_inputs:
+            _f.output_shapes = dict(zip(output_names, output_shapes))
+            _f.output_types = dict(zip(output_names, output_types))
+
         return _f
     return _as_func_decorator
 
 
-as_numpy_func = _as_func(is_numpy=True)
-as_tensorflow_func = _as_func(is_tf=True)
+as_numpy_func = _as_func(as_='np_fn')
+as_numpy_gen = _as_func(as_='np_gen')
+as_tensorflow_func = _as_func(as_='tf')

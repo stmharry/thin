@@ -1,8 +1,16 @@
 import collections
+import functools
 import gin
 import numpy as np
-import sys
 import tensorflow as tf
+
+
+def on_cpu(f):
+    @functools.wraps(f)
+    def _f(*args, **kwargs):
+        with tf.device('CPU'):
+            return f(*args, **kwargs)
+    return _f
 
 
 def logged_tensor(tensor, name=None):
@@ -25,10 +33,19 @@ def ndarray_feature(x):
     if x.dtype.type == np.str_:
         x = x.astype('S')
         return tf.train.Feature(bytes_list=tf.train.BytesList(value=x))
-    elif np.issubdtype(x.dtype, np.floating):
+    elif x.dtype in [np.float32, np.float64]:
         return tf.train.Feature(float_list=tf.train.FloatList(value=x))
-    elif np.issubdtype(x.dtype, np.integer):
+    elif x.dtype in [np.int32, np.int64]:
         return tf.train.Feature(int64_list=tf.train.Int64List(value=x))
+    else:
+        return tf.train.Feature(bytes_list=tf.train.BytesList(value=[x.tobytes()]))
+
+
+def ndarray_from_feature(x, dtype, shape=None):
+    x = tf.io.decode_raw(x, dtype)
+    if shape is not None:
+        x = tf.reshape(x, shape)
+    return x
 
 
 def namedtuple(typename, field_defaults):

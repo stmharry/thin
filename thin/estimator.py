@@ -27,10 +27,11 @@ flags.DEFINE_string('gin_file', None, 'Gin config file.')
 flags.DEFINE_multi_string('gin_param', None, 'Gin config parameters.')
 FLAGS = flags.FLAGS
 
-_CONFIG_GIN = 'config.gin'
+_CONFIG_GINS = ['config.gin', 'operative_config-0.gin']
 
 
 def main(_):
+    gin_paths = []
     if FLAGS.gin_file:
         gin_paths = [FLAGS.gin_file]
 
@@ -39,10 +40,12 @@ def main(_):
         if checkpoint_dir is None:
             checkpoint_dir = os.path.dirname(FLAGS.checkpoint_path)
 
-        gin_paths = [os.path.join(checkpoint_dir, _CONFIG_GIN)]
-
-    else:
-        gin_paths = []
+        for _CONFIG_GIN in _CONFIG_GINS:
+            gin_path = os.path.join(checkpoint_dir, _CONFIG_GIN)
+            logging.info(f'Checking for gin config {gin_path}')
+            if os.path.isfile(gin_path):
+                gin_paths = [gin_path]
+                break
 
     gin.parse_config_files_and_bindings(gin_paths, FLAGS.gin_param)
     estimator = Estimator()
@@ -82,16 +85,21 @@ class InputFn(object):
     def tfrecord_dir_root(self):
         return os.path.join(self.data_dir, 'tfrecords')
 
-    def _write_tfrecord(self, tfrecord, tfrecord_path):
+    def _write_tfrecord(self, tfrecords, tfrecord_path):
+        if not isinstance(tfrecords, list):
+            tfrecords = [tfrecords]
+
         writer = tf.io.TFRecordWriter(tfrecord_path)
-        feature = {
-            key: ndarray_feature(value)
-            for (key, value) in tfrecord.items()}
+        for (num, tfrecord) in enumerate(tfrecords):
+            feature = {
+                key: ndarray_feature(value)
+                for (key, value) in tfrecord.items()}
 
-        logging.info(f'Caching features {list(feature)} to {tfrecord_path}')
+            if num == 0:
+                logging.info(f'Caching features {list(feature)} to {tfrecord_path}')
 
-        example = tf.train.Example(features=tf.train.Features(feature=feature))
-        writer.write(example.SerializeToString())
+            example = tf.train.Example(features=tf.train.Features(feature=feature))
+            writer.write(example.SerializeToString())
 
     def _dataset_from_df(self, df, training):
         dataset = tf.data.Dataset.range(len(df))
@@ -231,6 +239,8 @@ class ModelFn(object):
             variables = sum(list(lr_group_to_variables.values()), [])
             gradients = tf.gradients(total_loss, variables)
 
+            metrics['gradient/global_norm'] = tf.linalg.global_norm(gradients)
+
             if self._train_spec.gradient_clip:
                 (gradients, _) = tf.clip_by_global_norm(
                     gradients, self._train_spec.gradient_clip)
@@ -308,7 +318,7 @@ class Estimator(InputFn, ModelFn):
 
     def train_eval(self):
         model_dir = self.create_dir(self.model_dir_root)
-        shutil.copy(FLAGS.gin_file, os.path.join(model_dir, _CONFIG_GIN))
+        shutil.copy(FLAGS.gin_file, os.path.join(model_dir, 'config.gin'))
 
         self._train_spec = TrainSpec(
             input_fn=self.input_fn,
@@ -331,6 +341,26 @@ class Estimator(InputFn, ModelFn):
 
         tf.estimator.train_and_evaluate(
             self._estimator, self._train_spec, self._eval_spec)
+
+    def profile(self):
+        model_dir = self.create_dir(self.model_dir_root)
+        shutil.copy(FLAGS.gin_file, os.path.join(model_dir, 'config.gin'))
+
+        self._train_spec = TrainSpec(
+            input_fn=self.input_fn,
+            hooks=[gin.tf.GinConfigSaverHook(model_dir)])
+
+        self._estimator = tf.estimator.Estimator(
+            model_fn=self.model_fn,
+            model_dir=model_dir,
+            config=RunConfig())
+
+        tf.profiler.experimental.start(self._estimator.model_dir)
+        self._estimator.train(
+            input_fn=self._train_spec.input_fn,
+            hooks=self._train_spec.hooks,
+            max_steps=self._train_spec.max_steps)
+        tf.profiler.experimental.stop()
 
     def predict(self, predict_keys=None):
         self._predict_spec = PredictSpec(input_fn=self.input_fn)

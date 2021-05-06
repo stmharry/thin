@@ -1,7 +1,6 @@
 import gin
 
 from tensorflow.keras import applications
-from tensorflow.compat.v1.keras.layers import BatchNormalization
 
 from thin.models import resnet
 
@@ -27,5 +26,3 @@ ResNet50_3D = gin.configurable(resnet.ResNet50_3D, module='thin.models')
 ResUNet18_3D = gin.configurable(resnet.ResUNet18_3D, module='thin.models')
 ResUNet34_3D = gin.configurable(resnet.ResUNet34_3D, module='thin.models')
 ResUNet50_3D = gin.configurable(resnet.ResUNet50_3D, module='thin.models')
-
-gin.external_configurable(BatchNormalization, module='tf.keras.layers')

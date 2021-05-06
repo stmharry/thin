@@ -355,6 +355,7 @@ class ResUNet(_ResNet):
                  block_cls=BasicBlock,
                  norm_cls=InstanceNormalization,
                  ndim=2,
+                 return_endpoints=False,
                  name='resunet'):
 
         super().__init__(
@@ -397,6 +398,7 @@ class ResUNet(_ResNet):
             strides=2,
             use_bias=True,
             name='conv1')
+        self.return_endpoints = return_endpoints
 
     def call(self, x, training):
         shape = tf.shape(x)
@@ -410,16 +412,23 @@ class ResUNet(_ResNet):
             x = model(x, training=training)
             xs.append(x)
 
+        endpoints = xs.copy()
+
         x = xs.pop(-1)
         for (model, _x) in zip(self._up_models, reversed(xs)):
             x = model(x, _x=_x, training=training)
+            endpoints.append(x)
 
         x = self.norm1(x, training=training)
         x = self.relu1(x)
         x = self.conv1(x)
         x = central_crop(x, shape=shape)
+        endpoints.append(x)
 
-        return x
+        if self.return_endpoints:
+            return endpoints
+        else:
+            return x
 
 
 ResUNet18 = _partial_with_signature(
