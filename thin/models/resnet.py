@@ -12,6 +12,8 @@ from tensorflow.keras.layers import GlobalAveragePooling3D
 from tensorflow.keras.layers import MaxPool2D
 from tensorflow.keras.layers import MaxPool3D
 from tensorflow.keras.layers import ReLU
+from tensorflow.keras.layers import UpSampling2D
+from tensorflow.keras.layers import UpSampling3D
 from tensorflow_addons.layers import InstanceNormalization
 
 
@@ -21,10 +23,22 @@ def conv_cls(ndim):
         padding='SAME', use_bias=False)
 
 
-def conv_transpose_cls(ndim):
+def conv_transpose_cls(ndim, use_upsampling=False):
+    if use_upsampling:
+        return functools.partial(
+            ConvTransposeWithUpsampling,
+            ndim=ndim)
+
+    else:
+        return functools.partial(
+            {2: Conv2DTranspose, 3: Conv3DTranspose}[ndim],
+            padding='SAME', use_bias=False)
+
+
+def upsampling_cls(ndim):
     return functools.partial(
-        {2: Conv2DTranspose, 3: Conv3DTranspose}[ndim],
-        padding='SAME', use_bias=False)
+        {2: UpSampling2D, 3: UpSampling3D}[ndim],
+        interpolation='bilinear')
 
 
 def max_pool_cls(ndim):
@@ -56,6 +70,7 @@ def _partial_with_signature(cls, cls_name, block_sizes, block_cls, ndim, name):
         def __init__(self,
                      num_classes=None,
                      norm_cls=InstanceNormalization,
+                     use_upsampling=False,
                      **kwargs):
 
             super().__init__(
@@ -65,11 +80,34 @@ def _partial_with_signature(cls, cls_name, block_sizes, block_cls, ndim, name):
                 block_cls=block_cls,
                 norm_cls=norm_cls,
                 ndim=ndim,
+                use_upsampling=use_upsampling,
                 name=name,
                 **kwargs)
 
     _new_cls.__name__ = cls_name
     return _new_cls
+
+
+class ConvTransposeWithUpsampling(tf.keras.Model):
+    def __init__(self,
+                 ndim,
+                 filters,
+                 kernel_size,
+                 strides,
+                 use_bias=True,
+                 name='conv'):
+
+        super().__init__(name=name)
+
+        self.upsampling = upsampling_cls(ndim=ndim)(size=strides)
+        self.conv = conv_cls(ndim=ndim)(
+            filters=filters, kernel_size=kernel_size, strides=1, use_bias=use_bias)
+
+    def call(self, x, training):
+        x = self.upsampling(x)
+        x = self.conv(x)
+
+        return x
 
 
 class BasicBlock(tf.keras.Model):
@@ -356,6 +394,7 @@ class ResUNet(_ResNet):
                  norm_cls=InstanceNormalization,
                  ndim=2,
                  return_endpoints=False,
+                 use_upsampling=False,
                  name='resunet'):
 
         super().__init__(
@@ -374,7 +413,7 @@ class ResUNet(_ResNet):
                 strides=2,
                 block_cls=block_cls,
                 conv_cls=conv_cls(ndim=ndim),
-                conv_transpose_cls=conv_transpose_cls(ndim=ndim),
+                conv_transpose_cls=conv_transpose_cls(ndim=ndim, use_upsampling=use_upsampling),
                 norm_cls=norm_cls,
                 name=f'up{num_layer + 1}')
             for num_layer in reversed(range(self.num_layers - 1))]
@@ -386,13 +425,13 @@ class ResUNet(_ResNet):
                 strides=2,
                 block_cls=BasicBlock,
                 conv_cls=conv_cls(ndim=ndim),
-                conv_transpose_cls=conv_transpose_cls(ndim=ndim),
+                conv_transpose_cls=conv_transpose_cls(ndim=ndim, use_upsampling=use_upsampling),
                 norm_cls=norm_cls,
                 name='up0'))
 
         self.norm1 = norm_cls(name='norm1')
         self.relu1 = ReLU(name='relu1')
-        self.conv1 = conv_transpose_cls(ndim=ndim)(
+        self.conv1 = conv_transpose_cls(ndim=ndim, use_upsampling=use_upsampling)(
             filters=num_classes,
             kernel_size=3,
             strides=2,
