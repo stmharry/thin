@@ -47,7 +47,7 @@ def _as_func(as_=None):
                     input_ = inputs[name]
                 elif as_ in ['np_fn', 'np_gen']:
                     input_ = np.asarray(default)
-                elif as_ == 'tf':
+                elif as_ in ['tf', 'tf_map']:
                     input_ = tf.constant(default, dtype=dtype)
 
                 input_list.append(input_)
@@ -56,6 +56,12 @@ def _as_func(as_=None):
                 output_list = f_partial(*input_list)
             elif as_ == 'tf':
                 output_list = tf.numpy_function(f_partial, input_list, output_types)
+            elif as_ == 'tf_map':
+                output_list = tf.map_fn(
+                    lambda _input_list:
+                        tf.numpy_function(f_partial, _input_list, output_types),
+                    input_list,
+                    fn_output_signature=output_types)
 
             return output_list
 
@@ -70,6 +76,8 @@ def _as_func(as_=None):
                     outputs[name] = output
                 elif as_ == 'tf':
                     outputs[name] = tf.ensure_shape(output, shape)
+                elif as_ == 'tf_map':
+                    outputs[name] = tf.ensure_shape(output, (None,) + tuple(shape))
 
             return outputs
 
@@ -95,3 +103,4 @@ def _as_func(as_=None):
 as_numpy_func = _as_func(as_='np_fn')
 as_numpy_gen = _as_func(as_='np_gen')
 as_tensorflow_func = _as_func(as_='tf')
+as_tensorflow_map_func = _as_func(as_='tf_map')
